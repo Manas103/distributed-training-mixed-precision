@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.pt
+*.pth
+tests/_tmp_ddp_sync/
+*.chrome_trace.json
