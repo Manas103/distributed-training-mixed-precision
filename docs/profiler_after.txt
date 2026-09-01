@@ -1,17 +1,17 @@
 -------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
                                                    Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
 -------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
-enumerate(DataLoader)#_MultiProcessingDataLoaderIter...        68.09%     474.613ms        68.15%     475.021ms      11.876ms            40  
-                                               aten::to         0.05%     321.694us         1.32%       9.217ms      23.041us           400  
-                               cudaPointerGetAttributes         0.03%     221.842us         0.03%     221.842us       3.262us            68  
-                                          cudaHostAlloc         0.38%       2.677ms         0.38%       2.677ms       1.339ms             2  
-                                         aten::_to_copy         0.05%     355.297us         0.89%       6.235ms      77.936us            80  
-                                    aten::empty_strided         0.13%     878.259us         0.13%     878.259us       7.319us           120  
-                                            aten::copy_         0.07%     481.393us         0.75%       5.217ms      65.210us            80  
-                                        cudaMemcpyAsync         0.68%       4.735ms         0.68%       4.735ms      59.193us            80  
-                                        cudaEventRecord         0.36%       2.483ms         0.36%       2.483ms       1.444us          1720  
-                      Optimizer.zero_grad#SGD.zero_grad         0.44%       3.086ms         0.44%       3.086ms      77.143us            40  
-                                           aten::conv2d         0.09%     606.983us         3.80%      26.519ms      94.712us           280  
-                                      aten::convolution         0.30%       2.091ms         3.72%      25.912ms      92.544us           280  
+enumerate(DataLoader)#_MultiProcessingDataLoaderIter...        71.24%     448.005ms        71.29%     448.317ms      11.208ms            40  
+                                               aten::to         0.57%       3.579ms         1.15%       7.253ms      18.131us           400  
+                                         aten::_to_copy         0.06%     360.245us         0.58%       3.674ms      45.921us            80  
+                                    aten::empty_strided         0.15%     916.999us         0.15%     916.999us       7.642us           120  
+                                            aten::copy_         0.08%     493.525us         0.41%       2.578ms      32.228us            80  
+                                        cudaMemcpyAsync         0.33%       2.085ms         0.33%       2.085ms      26.059us            80  
+                                        cudaEventRecord         0.36%       2.244ms         0.36%       2.244ms       1.305us          1720  
+                      Optimizer.zero_grad#SGD.zero_grad         0.60%       3.776ms         0.60%       3.776ms      94.403us            40  
+                                           aten::conv2d         0.09%     576.681us         3.93%      24.744ms      88.371us           280  
+                                      aten::convolution         0.30%       1.879ms         3.84%      24.167ms      86.311us           280  
+                                     aten::_convolution         0.22%       1.358ms         3.54%      22.288ms      79.599us           280  
+                                aten::cudnn_convolution         1.34%       8.414ms         3.33%      20.930ms      74.749us           280  
 -------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
-Self CPU time total: 697.011ms
+Self CPU time total: 628.903ms
