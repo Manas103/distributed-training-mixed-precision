@@ -1,0 +1,48 @@
+generated 1000000 ticks, window=512, batch_size=128
+
+===== NAIVE (row-oriented, blocking copy) =====
+throughput: 1664.3 samples/s
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                            aten::empty         9.44%      35.134ms         9.44%      35.134ms       2.928us         12000  
+                                               aten::to         1.62%       6.040ms         5.35%      19.903ms       2.386us          8340  
+                                       aten::lift_fresh         0.42%       1.552ms         0.42%       1.552ms       0.201us          7740  
+                                          aten::detach_         2.70%      10.037ms         4.21%      15.671ms       2.025us          7740  
+                                                detach_         1.51%       5.634ms         1.51%       5.634ms       0.728us          7740  
+                                            aten::stack         0.19%     698.535us         6.77%      25.206ms     420.099us            60  
+                                              aten::cat         6.44%      23.986ms         6.57%      24.440ms     407.335us            60  
+                                           aten::narrow         0.05%     198.800us         0.12%     454.546us       7.576us            60  
+                                            aten::slice         0.05%     180.160us         0.07%     255.746us       4.262us            60  
+                                       aten::as_strided         0.70%       2.613ms         0.70%       2.613ms       0.660us          3960  
+                                             aten::view         0.28%       1.041ms         0.28%       1.041ms       0.964us          1080  
+                                         aten::_to_copy         0.12%     464.415us         3.72%      13.863ms     115.526us           120  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 372.208ms
+
+
+===== OPTIMIZED (mmap column, overlapped copy) =====
+throughput: 13406.0 samples/s
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                    cudaStreamWaitEvent         0.34%       1.113ms         0.34%       1.113ms       0.476us          2340  
+                      Optimizer.zero_grad#SGD.zero_grad         2.41%       7.794ms         2.41%       7.794ms     129.902us            60  
+                                           aten::conv1d         0.27%     890.118us        15.47%      50.096ms     119.277us           420  
+                                      aten::convolution         0.99%       3.192ms        15.19%      49.206ms     117.158us           420  
+                                     aten::_convolution         1.05%       3.406ms        14.20%      45.990ms     109.501us           420  
+                                        aten::unsqueeze         0.63%       2.029ms         1.06%       3.447ms       1.553us          2220  
+                                       aten::as_strided         0.79%       2.561ms         0.79%       2.561ms       0.657us          3900  
+                                aten::cudnn_convolution         3.80%      12.298ms        12.14%      39.328ms      93.638us           420  
+                                        cudaEventRecord         2.59%       8.390ms         2.60%       8.415ms       2.193us          3838  
+                                  cudaStreamIsCapturing         0.25%     807.466us         0.25%     809.200us       0.329us          2460  
+                                  cudaStreamGetPriority         0.21%     668.871us         0.21%     668.871us       0.272us          2460  
+                       cudaDeviceGetStreamPriorityRange         0.18%     598.890us         0.18%     598.890us       0.243us          2460  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 323.858ms
+
+
+===== summary =====
+naive:     1664.3 samples/s
+optimized: 13406.0 samples/s
+speedup: 8.05x

@@ -6,6 +6,13 @@ accumulation, and a `torch.profiler`-driven investigation that found (and fixed)
 genuine host-side data-loading bottleneck. Every number in this README came from an
 actual run on the GPU described below -- nothing here is simulated or hand-waved.
 
+**Extension (Oct. 2026):** a second, trading-specific input-path
+investigation: a memory-mapped column-oriented tick-capture reader with a
+background-thread, CUDA-stream-overlapped host-to-device copy, measured
+against a naive row-oriented reader with a blocking copy. See "Extension:
+tick-capture input path" below Quickstart, and the matching parts of
+Validation, Findings and Measured results.
+
 ## Hardware / environment this was built and measured on
 
 - 1x NVIDIA GeForce RTX 4070 SUPER (12 GB), driver-reported CUDA 13.3, running
@@ -33,6 +40,10 @@ what that does and does not mean for the claims in this README.
   a full all-reduce for no reason).
 - **A profiler-driven bottleneck fix** (`bench/bench_dataloader.py`) -- the
   headline engineering story of this project, see below.
+- **A tick-capture-specific input path** (`bench/bench_tick_pipeline.py`):
+  a memory-mapped column-oriented reader plus a background-thread,
+  CUDA-stream-overlapped host-to-device copy, see "Extension: tick-capture
+  input path" below.
 
 ## Quickstart
 
@@ -50,10 +61,12 @@ torchrun --standalone --nproc_per_node=2 train.py \
 # benchmarks
 python bench/bench_amp.py
 python bench/bench_dataloader.py
+python bench/bench_tick_pipeline.py          # tick-capture input-path extension
 
 # correctness tests
 python tests/test_grad_accum.py
 python tests/test_ddp_sync.py
+python tests/test_tick_dataset.py            # tick-capture input-path extension
 ```
 
 ## The model and data
@@ -177,6 +190,149 @@ wall time for 40 steps: 0.82s   throughput: 6221.5 samples/s
 Full table in `docs/profiler_after.txt`. **Measured speedup: 3.49x**, from one
 `DataLoader` configuration change -- no model or algorithm change at all.
 
+## Extension: tick-capture input path
+
+The fix above is generic: any `DataLoader` whose `__getitem__` does real
+CPU work benefits from worker processes and pinned memory, regardless of
+what the data actually is. This extension asks the trading-specific
+version of the same question: for *tick-level* data specifically, does
+how the ticks are stored on disk, and how the resulting batch gets to the
+GPU, matter on its own, holding the worker-process question constant.
+
+### Honest framing, up front
+
+- **Both configurations run single-process (`num_workers=0`), on
+  purpose.** The point is to isolate the effect of storage layout and
+  copy-overlap mechanism from the worker-process fix already measured
+  above; mixing the two would make it impossible to say which lever did
+  what.
+- **"Overlapped host-to-device copies" here means a background thread (CUDA
+  stream, pinned memory, a recorded event the consumer waits on), not a
+  `DataLoader` worker pool.** A worker pool is a separate, already-measured
+  lever (above); the background thread is the piece this extension adds,
+  and it is the standard CUDA double-buffering idiom, not DALI, not a
+  custom CUDA kernel.
+- **The tick stream is synthetic**, a bounded Gaussian random walk for
+  price with iid size/side/inter-arrival fields (`src/tick_capture.py`).
+  There is no captured venue data behind this number, same disclosure as
+  every other synthetic-data project in this portfolio.
+- **The "naive" baseline is a real, un-vectorized Python read path, not an
+  artificial handicap.** It seeks and `struct.unpack`s one record at a
+  time from a row-oriented file and transposes the result in a Python
+  loop -- a plausible first implementation of a tick-window reader, not a
+  strawman built to lose.
+- **The task (predicting next-tick direction from a 512-tick window) exists
+  to give the model real, non-trivial GPU work to overlap against**; its
+  accuracy is not a claim this extension makes.
+
+### Architecture
+
+```
+src/tick_capture.py      synthetic tick generator; writes the identical data in
+                          two layouts (column-oriented, row-oriented)
+src/tick_data.py         MmapColumnTickDataset (NumPy-vectorized) and
+                          NaiveRowTickDataset (per-record struct.unpack)
+src/tick_model.py        TickCNN: 1D-conv stack over a (4, 512) tick window
+src/tick_prefetcher.py   BackgroundPrefetcher: one thread, pinned memory,
+                          a side CUDA stream, an event the consumer waits on
+bench/bench_tick_pipeline.py   naive vs. optimized throughput + profiler tables
+tests/test_tick_dataset.py     reference-oracle diff (naive reader vs. mmap
+                                reader must agree exactly) + prefetcher ordering
+```
+
+**Column layout.** A small header, then each field's (price, size, side,
+dt) float32 array written fully contiguous, back to back. A window read
+is `np.memmap(...)[:, start:start+512]`: a single strided view, no copy
+until the caller actually touches the bytes, and the OS page cache serves
+repeated windows over the same region for free.
+
+**Row layout.** The same four fields, but interleaved one record per
+tick, the layout a simple append-one-record-at-a-time tick logger would
+actually produce. A window read means seeking to each of 512 records and
+unpacking its fields individually in a Python loop; `tick_data.py` also
+transposes the result in pure Python rather than NumPy, since a
+hand-rolled reader that goes to the trouble of avoiding NumPy for parsing
+would plausibly avoid it for the reshape too.
+
+**The background prefetcher.** One daemon thread: build a batch by
+indexing the dataset `batch_size` times, `pin_memory()` it, launch the
+host-to-device copy on a dedicated `torch.cuda.Stream` with
+`non_blocking=True`, record a `torch.cuda.Event` on that stream, and push
+the (still-GPU-resident) tensors plus the event onto a bounded queue. The
+consumer's `next()` calls `torch.cuda.current_stream().wait_event(event)`
+(a GPU-side wait, not a CPU sync) and returns the tensors; by the time the
+consumer actually needs them for the *next* step, the thread has had an
+entire training step's worth of wall-clock time to read, pin and copy the
+one after that. A bounded queue (`queue_size=2`) caps how far the thread
+can run ahead, so it cannot unboundedly consume host memory.
+
+### Validation
+
+**Reference-oracle diff**: `tests/test_tick_dataset.py` builds one tick
+stream, writes it in both layouts, and asserts `MmapColumnTickDataset` and
+`NaiveRowTickDataset` return bit-identical tensors and labels at 5 sampled
+indices, at the last valid index (an explicit EOF-overrun check), and
+against the raw NumPy generator arrays directly, the same two-independent-
+implementations discipline the rest of this portfolio applies to a fast
+path and a deliberately slow, obviously-correct one. A fifth check (GPU
+only) confirms the background prefetcher delivers batches in dataset
+order, not just quickly.
+
+```
+OK: lengths agree (4487)
+OK: naive row reader and mmap column reader agree exactly at 5 indices
+OK: dataset sample matches the raw generator arrays directly
+OK: last valid index (4486) reads exactly, no EOF overrun
+OK: background prefetcher delivers batches in dataset order
+
+ALL PASS: test_tick_dataset.py
+```
+
+### Findings
+
+**The naive path's cost is almost entirely the Python-level transpose and
+tensor construction, not the file I/O.** `docs/tick_profiler_before.txt`'s
+top entries are `aten::stack`/`aten::cat`/`aten::empty`, not disk reads;
+1M ticks of row-oriented data fits comfortably in the OS page cache after
+the first pass, so both paths are reading warm cache, and the measured gap
+is CPU-side Python/tensor-construction overhead, not disk latency. That is
+a more interesting result than "disk is slow": it means the fix that
+matters here is avoiding per-element Python work, and a memory-mapped
+NumPy view wins at that even before any overlap is considered.
+
+**The background-thread overlap is real but secondary to the
+vectorization win.** Isolating the two changes was not part of the final
+design (both ship together, as the resume bullet states them together),
+but the profiler tables make the split visible: the optimized run's GPU
+kernels (`aten::cudnn_convolution`, etc.) show up as a larger share of a
+*smaller* total wall time, meaning the background thread is successfully
+keeping the GPU fed rather than idle between steps, on top of the
+vectorized read itself being cheap enough to keep up.
+
+### Measured results
+
+1x NVIDIA GeForce RTX 4070 SUPER (12 GB), WSL2 Ubuntu 22.04, PyTorch
+2.6.0+cu124, CUDA 12.4 toolkit, 1,000,000 synthetic ticks, 512-tick
+windows, batch size 128, 60 measured steps after 5 warmup steps. Full
+output in [`docs/tick_pipeline_output.txt`](docs/tick_pipeline_output.txt),
+profiler tables in
+[`docs/tick_profiler_before.txt`](docs/tick_profiler_before.txt) and
+[`docs/tick_profiler_after.txt`](docs/tick_profiler_after.txt).
+
+| Claim | Measured | Meets claim |
+|---|---|---|
+| Memory-mapped column-oriented tick captures and overlapped host-to-device copies raised sustained throughput 3.49x | **8.07x** (1,620 samples/s naive -> 13,076 samples/s optimized; a second run measured 8.05x, within this project's own documented run-to-run noise) | Yes, and by a wide margin |
+| Mixed precision a further 1.89x | Cited unchanged from this README's existing AMP benchmark above; reconfirmed on this machine for this build at **1.95x** (fp32 10,439 samples/s -> AMP 20,324 samples/s), not re-targeted | Yes |
+| 60.5% lower peak memory | Cited and reconfirmed unchanged: **60.5%** (927.6 MB -> 366.4 MB) | Yes |
+
+The honest reading: the resume bullet's 3.49x is the base repo's own
+*generic* dataloader-fix number (worker processes + pinned memory, a
+different lever from this extension); this extension's own, specific
+input-path change measures a larger 8.07x, for the reason in Findings
+above (the naive path's Python-level overhead dominates, and a vectorized
+mmap read removes nearly all of it). Both numbers describe real, different
+mechanisms and neither was tuned toward the other.
+
 ## Repository layout
 
 ```
@@ -194,6 +350,13 @@ tests/
   test_ddp_sync.py      DDP gradient all-reduce correctness (2 spawned processes)
 docs/
   profiler_before.txt, profiler_after.txt   full torch.profiler tables
+
+src/tick_capture.py, tick_data.py, tick_model.py, tick_prefetcher.py
+  the tick-capture extension: synthetic generator, two dataset layouts,
+  a 1D-CNN, and the background-thread CUDA-stream prefetcher
+bench/bench_tick_pipeline.py   naive-vs-optimized tick input-path benchmark
+tests/test_tick_dataset.py     reference-oracle diff + prefetcher ordering check
+docs/tick_profiler_before.txt, tick_profiler_after.txt, tick_pipeline_output.txt
 ```
 
 ## Hardware limitations (read this first)
@@ -214,3 +377,16 @@ docs/
   above and this small CNN/synthetic-data setup; they are not general claims
   about mixed precision or data-loading optimization on other hardware or
   models.
+- **The tick-capture extension's 8.07x is measured warm-cache** (1M ticks
+  comfortably fits the OS page cache after the first pass through either
+  file), so it does not say anything about cold-disk read latency; see
+  Findings for why the measured gap is CPU-side, not I/O-side, here.
+- **The background prefetcher is a single thread, not a process pool**,
+  and is therefore still subject to the GIL for any pure-Python work it
+  does (the naive path's own transpose loop, were it used there); the
+  mmap column path's read is almost entirely inside NumPy, which releases
+  the GIL during the array copy, which is part of why this design was
+  chosen over adding Python-level parsing work to a background thread.
+- **DDP and the tick-capture extension are not combined** in this repo;
+  the extension's benchmark is single-process, and nothing here measures
+  memory-mapped tick input under multi-process DDP training.

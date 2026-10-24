@@ -1,0 +1,17 @@
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                    cudaStreamWaitEvent         0.34%       1.113ms         0.34%       1.113ms       0.476us          2340  
+                      Optimizer.zero_grad#SGD.zero_grad         2.41%       7.794ms         2.41%       7.794ms     129.902us            60  
+                                           aten::conv1d         0.27%     890.118us        15.47%      50.096ms     119.277us           420  
+                                      aten::convolution         0.99%       3.192ms        15.19%      49.206ms     117.158us           420  
+                                     aten::_convolution         1.05%       3.406ms        14.20%      45.990ms     109.501us           420  
+                                        aten::unsqueeze         0.63%       2.029ms         1.06%       3.447ms       1.553us          2220  
+                                       aten::as_strided         0.79%       2.561ms         0.79%       2.561ms       0.657us          3900  
+                                aten::cudnn_convolution         3.80%      12.298ms        12.14%      39.328ms      93.638us           420  
+                                        cudaEventRecord         2.59%       8.390ms         2.60%       8.415ms       2.193us          3838  
+                                  cudaStreamIsCapturing         0.25%     807.466us         0.25%     809.200us       0.329us          2460  
+                                  cudaStreamGetPriority         0.21%     668.871us         0.21%     668.871us       0.272us          2460  
+                       cudaDeviceGetStreamPriorityRange         0.18%     598.890us         0.18%     598.890us       0.243us          2460  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 323.858ms
